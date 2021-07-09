@@ -16,7 +16,7 @@ package runtime
 import (
 	"context"
 	"time"
-	
+
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -212,8 +212,8 @@ func (r *resourceReconciler) Sync(
 				// there is some changes available in the latest.RuntimeObject()
 				// (example: ko.Status.Conditions) which have been
 				// updated in the resource
-				// Thus, patchResource() call should be made here
-				_ = r.patchResource(ctx, desired, latest)
+				// Thus, patchResourceStatus() call should be made here
+				_ = r.patchResourceStatus(ctx, desired, latest)
 			}
 			return err
 		}
@@ -238,8 +238,8 @@ func (r *resourceReconciler) Sync(
 				// there is some changes available in the latest.RuntimeObject()
 				// (example: ko.Status.Conditions) which have been
 				// updated in the resource
-				// Thus, patchResource() call should be made here
-				_ = r.patchResource(ctx, desired, latest)
+				// Thus, patchResourceStatus() call should be made here
+				_ = r.patchResourceStatus(ctx, desired, latest)
 			}
 			return err
 		}
@@ -267,8 +267,8 @@ func (r *resourceReconciler) Sync(
 					// there is some changes available in the latest.RuntimeObject()
 					// (example: ko.Status.Conditions) which have been
 					// updated in the resource
-					// Thus, patchResource() call should be made here
-					_ = r.patchResource(ctx, desired, latest)
+					// Thus, patchResourceStatus() call should be made here
+					_ = r.patchResourceStatus(ctx, desired, latest)
 				}
 				return err
 			}
@@ -293,7 +293,7 @@ func (r *resourceReconciler) Sync(
 					"requeueing resource after finding resource synced condition false",
 				)
 				return requeue.NeededAfter(
-					ackerr.TemporaryOutOfSync, requeue.DefaultRequeueAfterDuration)				
+					ackerr.TemporaryOutOfSync, requeue.DefaultRequeueAfterDuration)
 			}
 		}
 	}
@@ -301,15 +301,62 @@ func (r *resourceReconciler) Sync(
 }
 
 // patchResource patches the custom resource in the Kubernetes API to match the
-// supplied latest resource.
+// supplied latest resource's "metadata", "spec" and "status"
+// To only patch the metadata and spec, use "patchResourceMetadataAndSpec".
+// To only patch the status, use "patchResourceStatus"
 func (r *resourceReconciler) patchResource(
+	ctx context.Context,
+	desired acktypes.AWSResource,
+	latest acktypes.AWSResource,
+) error {
+	err := r.patchResourceMetadataAndSpec(ctx, desired, latest)
+	if err != nil {
+		return err
+	}
+
+	err = r.patchResourceStatus(ctx, desired, latest)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// patchResourceMetadataAndSpec patches the custom resource in the Kubernetes API to match the
+// supplied latest resource's metadata and spec.
+func (r *resourceReconciler) patchResourceMetadataAndSpec(
 	ctx context.Context,
 	desired acktypes.AWSResource,
 	latest acktypes.AWSResource,
 ) error {
 	var err error
 	rlog := ackrtlog.FromContext(ctx)
-	exit := rlog.Trace("r.patchResource")
+	exit := rlog.Trace("r.patchResourceMetadataAndSpec")
+	defer exit(err)
+
+	rlog.Enter("kc.Patch (metadata & spec)")
+	err = r.kc.Patch(
+		ctx,
+		latest.RuntimeObject(),
+		client.MergeFrom(desired.RuntimeObject()),
+	)
+	rlog.Exit("kc.Patch (metadata & spec)", err)
+	if err != nil {
+		return err
+	}
+	rlog.Debug("patched resource metadata & spec", "latest", latest)
+	return nil
+}
+
+// patchResourceStatus patches the custom resource in the Kubernetes API to match the
+// supplied latest resource.
+func (r *resourceReconciler) patchResourceStatus(
+	ctx context.Context,
+	desired acktypes.AWSResource,
+	latest acktypes.AWSResource,
+) error {
+	var err error
+	rlog := ackrtlog.FromContext(ctx)
+	exit := rlog.Trace("r.patchResourceStatus")
 	defer exit(err)
 
 	changedStatus, err := r.rd.UpdateCRStatus(latest)
